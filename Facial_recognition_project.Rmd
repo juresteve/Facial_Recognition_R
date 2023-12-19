@@ -1,0 +1,791 @@
+---
+title: "Assignment: Facial Recognition"
+author: "Juan Luis Jurado Esteve, Julia Gómez Concejo"
+date: 'UC3M, 2023/24'
+output:
+  html_document: 
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: no
+    toc: no
+    toc_depth: 1
+  pdf_document:
+    css: my-theme.css
+    theme: cerulean
+    highlight: tango
+    number_sections: yes
+    toc: yes
+    toc_depth: 1
+editor_options:
+  chunk_output_type: console
+---
+
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+# PART A
+
+### In this first part of the assignment, you will have to implement a facial recognizer based on principal component analysis. In order to build this classifier, you will have access to a frontal facial image dataset. The teacher has kidnapped part of this dataset to evaluate your classifier.
+
+We have first loaded the whole dataset as a matrix $\texttt{data}$, where the rows are the instances (150 images) and the columns are the attributes (pixels/colours). We have also used this loop to create a vector which keeps the labels of the train set of the $\texttt{trainDataset}$, of the evaluation set of the $\texttt{trainDataset}$, of the whole $\texttt{trainDataset}$ and of the whole $\texttt{Dataset}$, all of which we will use later on.
+
+```{r}
+library(tidyverse)
+library(OpenImageR)
+
+## Load the data & create the image matrix
+data = matrix(nrow = 150, ncol=108000)
+test_labels = c()       #take advantage of the running loop 
+evalTrain_labels = c()  #to write the labels
+train_labels = c() 
+model_labels = c()
+for (i in seq_len(25)){
+        test_labels = c(test_labels, paste("Person", i))
+        evalTrain_labels = c(evalTrain_labels, rep(paste("Person", i), 4))
+        train_labels = c(train_labels, rep(paste("Person", i), 5))
+        model_labels = c(model_labels, rep(paste("Person", i), 6))
+        for (j in seq_len(6)){
+                ch = LETTERS[j]
+                fileName = paste0("Training/", as.character(i), ch, "T.jpg")
+                pic =readImage(fileName)
+                data[6*i+j-6,] = as.vector(pic)
+        }
+}
+```
+
+### a) Build a function that implements the Principal Component Analysis. This function takes as input a set of observations and returns the mean of these observations, the matrix P containing the eigenvectors and a vector D containing the variance explained by each principal axis. It is only allowed to use the function eigen.
+
+As we are told, we have created the function $\texttt{PCA_analysis}$, which takes as input the argument $\texttt{matrix}$, that represents our data with the rows as the different observations. This is why we compute the mean of the observations as $\texttt{avg = apply(matrix, 2, mean)}$, having $\texttt{avg}$ as an output of the function.
+
+Our data matrix scaled, $\texttt{X}$, is also an output of this function. The general effect of using $\texttt{scale(matrix, center = T, scale = T)}$ is to standardize the data in the matrix so that each column has a mean of 0 and a standard deviation of 1. This type of standardization is commonly used in data analysis techniques such as linear regression, principal component analysis (PCA), and other methods where comparing variables on different scales is important.
+
+In order to compute the eigenvectors of the matrix $P$ (the covariance matrix of the data) without exceeding the computer memory, we have used the computations taught in class:
+
+Given our data matrix $G$ (in this case of dimensions 125x108000, the explanation of why we have chosen 125 instead of 150 will be given afterwards), its covariance matrix is 
+$$\Sigma_l=\frac{1}{n-1} G^TG.$$ This matrix is of dimensions 108000x108000, and computing its eigenvectors would exceed the computer's memory. Therefore, knowing that the non-zero eigenvalues of $\Sigma_l$ and $\Sigma_s$ are the same, $\Lambda$. Therefore, it is easier to compute the associated eigenvalues of $\Sigma_s$ and, from them, compute the eigenvectors of $\Sigma_l$ associated to the non-zero eigenvalues. $\Sigma_s$ is the covariance matrix of $G^T$, $$\Sigma_s=\frac{1}{n-1} GG^T,$$ of dimensions 125x125 and whose eigenvalues are easier to compute.
+
+In order to compute the eigenvectors of $\Sigma_l$ associated to the non-zero eigenvalues from these, we follow the next proof:
+$$\Sigma_s \phi_s=\phi_s \Lambda\implies, $$ where $\phi_s$ is the matrix 125x125 of eigenvectors of $\Sigma_s$.
+$$\implies  \frac{1}{n-1} GG^T \phi_s=\phi_s \Lambda\implies\\
+\implies  \frac{1}{n-1} G^TGG^T \phi_s=G^T\phi_s \Lambda\implies\\
+\implies  \Sigma_l \left( G^T\phi_s\right)=\left( G^T\phi_s\right) \Lambda$$
+Therefore, we can get the relevant eigenvectors of our 'long' covariance matrix by multiplying $G^T$ (108000x125) by $\phi_s$ (125x125), obtaining a matrix 108000x125, in which each vector is a linear combination of all the images in order of descendent variance (with the first vector being the one which supplies the most percentage of variance and so on). We have returned this calculation iin the output $\texttt{eigenVec}$.
+
+The variance supplied by each eigenvector is given by the eigenvalues in $\Lambda$, and we have computed the variance proportion of each eigenvector in the output $\texttt{varProp}$.
+
+```{r}
+library(gridExtra)
+library(grid)
+
+PCA_analysis = function(matrix){
+  
+  ## Compute the mean for each column
+  avg = apply(matrix, 2, mean)
+  
+  ## Scale and calculate the covariance matrix with its eigenvectors
+  X = scale(matrix, center = T, scale = T)
+  Sigma = cov(t(X))
+  Eigen = eigen(Sigma)
+  eigenVec = t(X)%*%Eigen$vectors
+  
+  ## Calculate the proportion of variance explained by each PC
+  varProp = Eigen$values/sum(Eigen$values)
+  
+  returnList = list(avg, eigenVec, varProp,X)
+  return (returnList)
+}
+```
+
+### b) Build a classifier (function) that takes as input an image and an object with the parameters of the classifier. Internally, the function uses a k-nn classifier and the PCA representation of the images. If the person in the image belongs to the database, it returns the person’s identifiers. Otherwise it returns 0. In order to build this, you will need to consider: the percentage of the variance retaining by the PCs, the number of neighbors of the k-nn, the similarity metric and the threshold to determine when the person belongs to the database.
+### and c) Explain how you have determined the previous parameters
+
+This section includes both b) and c), since we are of the opinion that explaining the code as we present it grants a better ground for understanding.
+
+In the first place, we have divided the data between a training data set (125 images) and a test data set (25 images), which constitute $\frac{5}{6}$ and $\frac{1}{6}$ of the original data set respectively. We have computed this division so that there are images of the 25 people in the test set as well. We will use the training set for all our computations in this section, and only use the test data set for the estimation of future performance.
+
+```{r}
+# division of the data in train and test
+# fixing the seed for reproducibility
+set.seed(42)
+
+# computing the number of rows in the whole dataset
+n = nrow(data)
+
+# dividing the images in the groups of the people they represent
+grupos = rep(1:ceiling(n/6), each=6, length.out=n)
+
+# initialiting the datasets
+trainDataset = data.frame()
+testDataset = data.frame()
+intest = c()
+intrain = c()
+
+# loop to select 5 indexes for training and 1 index for test from each person-group
+for (i in 1:max(grupos)) {
+  indices_del_grupo = which(grupos == i)
+  seleccionados_para_test = sample(indices_del_grupo, 1)
+  seleccionados_para_train = setdiff(indices_del_grupo, seleccionados_para_test)
+  intest = c(intest,seleccionados_para_test)
+  intrain = c(intrain,seleccionados_para_train)
+}
+trainDataset = data[intrain,]
+testDataset = data[intest,]
+```
+
+In second place, we have created a function $\texttt{PCmatrix}$ that selects the eigenvectors of the covariance matrix that constitute a certain percentage $\texttt{varPerc}$ to the data ($\texttt{dataMatrix}$). We have achieved this through the use of the function $\texttt{PCA_analysis}$ computed in section a), from which we get the eigenvectors of the covariance matrix associated to our data matrix (which are already ordered by the variance proportion that they contribute to the data) and the variance that each of them contribute, this is, its associated eigenvalues.
+
+```{r}
+PCmatrix <- function(dataMatrix, PVE) {
+  ## Get eigenvectors and eigenvalues (proportion)
+  list <- PCA_analysis(dataMatrix)
+  eigenVec <- list[[2]]
+  varProp <- list[[3]]
+  
+  ## Initialize the proportion of variance explained
+  varExp <- 0
+  i <- 0
+  
+  ## build PCs containing a given proportion of variance explained (PVE)
+    while(varExp < PVE && i < length(varProp)) {
+      i<-i+1
+      varExp <- varExp + varProp[i]
+    }
+  
+  PCs <- eigenVec[,1:i]
+  return(PCs)
+}
+```
+
+In third place, having a $\texttt{trainDataset}$ that we can finally use due to its reduced dimensions, we have decided to choose the optimal hyperparameters for computing our KNN model by performing 5-fold crossvalidation. For this task, we have created the function $\texttt{train_eval}$ which outputs the different combinations. The first part for computing this crossvalidation is dividing the data in groups of 1/5, selecting all the combinations for dividing our $\texttt{trainDataset}$ in a train set of $\frac{4}{5}$ of the data and an evaluation set of $\frac{1}{5}$ of the data, but making sure that in all of the combinations there are images of all the people in both sets. We have saved all these combinations in a list of lists $\texttt{listacombinaciones}$.
+
+```{r}
+train_eval = function(trainDataset){
+        # we divide the trainDataset in another train set (4/5) and evaluation set (1/5)
+        # computation of the number of rows in the trainDataset
+        n = nrow(trainDataset)
+        # assigning a group to the images of each person of the dataset
+        grupos = rep(1:ceiling(n/5), each=5, length.out=n)
+        # initializing listacombinaciones as a list of lists
+        listacombinaciones = vector("list", 5)
+        # loop to select 4 indexes for training and 1 index for evaluation in each group,
+        # and saving all the combinations of this election
+        for (j in 1:5){
+                indices = c()
+                for (i in 1:max(grupos)) {
+                        indices_del_grupo = which(grupos == i)
+                        indices = c(indices,indices_del_grupo[j])
+                }
+                eval = as.data.frame(trainDataset[indices,])
+                train = as.data.frame(trainDataset[-indices,])
+                listacombinaciones[[j]] = list(train,eval)
+        }
+        return(listacombinaciones)
+}
+```
+
+Next, we build a function to tune the hyperparameters of the knn that our model will use. Specifically, this selects the best number of neighbours (k) using 5-fold crossvalidation as inner evaluation.
+
+The function $\texttt{k_tuning}$ uses the built in knn function of the $\texttt{class}$ library to compute the optimal k in a set of possible values by iteration. In order to compute the optimal $k$, we have evaluated the effect of choosing $k$ in the range $[1,4]$ by computing the predictions of the KNN model for all of the combinations of train set and evaluation set of the original $\texttt{trainDataset}$, which are recorded in $\texttt{listadecombinaciones}$. We have compared these predictions with the labels of the evaluation sets in order to compute the accuracy, and we have computed the mean of all the accuracies of all the combinations of train set and evaluation set for each of the $k$. Finally, we have selected as the optimal $k$ that one for which the mean of accuracies is maximum, and we have also selected that maximum value of accuracy.
+
+Note that, since there are 4 instances in each class, it makes no sense to include more than 4 neighbours in the calculation of $k$.
+
+```{r}
+library(class)
+k_tuning = function(listacombinaciones, train_labels, test_labels){
+        train_labels = as.factor(train_labels)
+        means = vector("numeric",length = 4)
+        for (k in 1:4){
+                accuracies = vector("numeric", length = 5)
+                for (j in 1:5){
+                        set.seed(123)
+                        predicciones = knn(train = listacombinaciones[[j]][[1]],
+                                           test = listacombinaciones[[j]][[2]],
+                                           cl = train_labels, k = k)
+                        accuracy = sum(predicciones == test_labels) / 
+                                length(test_labels)
+                        accuracies[j] = accuracy
+                }
+                means[k] = mean(accuracies)
+        }
+        optimalk = which(means==max(means))
+        returnList = list(optimalk, max(means))
+        return(returnList)
+}
+```
+
+With all of these functions already computed, we are able to proceed with the analysis of the optimal hyperparameters for our KNN model. We are going to optimize the proportion of variance by selecting the lowest proportion of variance for which our model gets the maximum accuracy. We are going to make this selection by computing an elbow graph with all of the proportions of variance in a range from 0 to 1 and the corresponding highest accuracy achieved by the optimal $k$ for each percentage. This optimal $k$ was computed using the previous function, $\texttt{k_tuning}$, and it chose the $k$ from a range [1,4] for which the maximum mean of accuracies of all of the combinations is achieved.
+
+We have computed a certain percentage of the principal components of the data matrix, this would constitute our projection matrix $P$, and we have computed the projection of our data onto these principal components, which allows us to keep the 125 images with the pixels dimension that contribute most of the variance.
+
+```{r, cache = TRUE}
+pve<- seq(0.1, 1, by = 0.1)
+optk = vector(length = 10)
+accuracies = vector(length = 10)
+
+for (i in 1:10){
+        
+        # PCA of the train data 
+        trainPC = trainDataset%*%PCmatrix(trainDataset, pve[i])
+        
+        # split train data into train/evaluation
+        listacombinaciones = train_eval(trainPC)
+        
+        # Hyperparameter tuning for best K
+        best = k_tuning(listacombinaciones, evalTrain_labels, test_labels)
+        optk[i] = best[[1]][[1]]
+        accuracies[i] = best[[2]]
+        
+}
+```
+
+The following plot shows the accuracy of the model computed with the optimal value of k, for different percentages of variance from 0.1 to 1. Note that the $\texttt{PCmatrix}$ function is built to always take at least one PC even if the PVE is less than the fraction provided by this vector. For this reason, the values in the plot can be interpreted as a lower bound rather than an exact value.
+
+```{r}
+plotdf = data.frame(acc = accuracies, PVE = seq(0.1, 1, by = 0.1))
+ggplot(plotdf, aes(PVE, acc)) +
+        geom_line(col = "steelblue") +
+        geom_point() +
+        labs(x = "Proportion of Variance Explained (PVE)",
+             y = "Accuracy of the model",
+             title = "Evaluation for optimal PVE") + 
+        theme(plot.title = element_text(hjust = 0.5))
+```
+
+As we can see in the previous plot, for a percentage of variance of 90%, a 100% of accuracy is already achieved by using its optimal $k$:
+
+```{r}
+PVEselected = pve[which(accuracies==max(accuracies))[1]]
+kselected = optk[which(accuracies==max(accuracies))[1]]
+cat('The optimal number of neighbors for a', PVEselected*100, '% PVE is:',kselected,'.')
+```
+
+After having completed the hyperparameter analysis, we are going to determine the threshold for which a given image does not match any class and we can say that it does not belong to the original dataset. In order to determine this threshold, we have created a function that computes the average distance between two points in the same class.
+
+```{r}
+## Compute mean distance between two points in the same class
+class_dist = function(dataPC, inst_per_class){
+        mdist = vector(length = 25)
+        for (i in 1:25){
+                distances = dist(
+                        dataPC[((i-1)*inst_per_class+1):(i*inst_per_class), ]
+                )
+                mdist[i] = mean(distances)
+        }
+        return(mean(mdist))
+}
+```
+
+We also have created a function that, given a threshold, determines whether the test images lie within the threshold (therefore belong to the dataset) or out of the threshold (therefore do not belong to the dataset).
+
+```{r}
+## Check for images foreign to our database
+DBcheck = function(trainPC, testPC, predictions, inst_per_class, th){
+        predictions = as.character(predictions)
+        
+        #mean distance between two points in each class
+        cldist = class_dist(trainPC, inst_per_class)
+        
+        if (!is.matrix(testPC)) {
+          #condition for a testPC vector for using the initial images later
+          testPC = 1%*%testPC
+        }
+        for (i in seq_along(predictions)){
+                
+                #coordinates of train points in a class
+                cl = as.numeric(strsplit(predictions[i], " ")[[1]][2])
+                clM = trainPC[((cl-1)*inst_per_class+1):(cl*inst_per_class), ]
+                
+                #mean distance between test point and training data 
+                #in its assigned class
+                distances = vector(length = nrow(clM))
+                for (j in 1:nrow(clM)) {
+                        distances[j] = dist(rbind(testPC[i, ], clM[j, ]))
+                }
+                
+                #not in database if distance > threshold
+                if (mean(distances) >= th*cldist){
+                        predictions[i] = "Not in database"
+                }
+        }
+        return(predictions)
+}
+```
+
+Using all of these functions, we have finally created a function that evaluates the accuracy of our model.
+
+```{r}
+## Estimation of future performance
+modelEval = function(train, test, trainLabels, testLabels, k, PVE,
+                     th){
+        
+        # Get the PC decomposition for the train and test set
+        eigenVecs = PCmatrix(train, PVE)
+        trainPC = trainDataset%*%eigenVecs
+        testPC = test%*%eigenVecs
+        
+        # Run knn for PC representation of test set
+        trainLabels = as.factor(trainLabels)
+        predictions = knn(train = trainPC,
+                          test = testPC,
+                          cl = trainLabels, k = k)
+
+        
+        # Check for alien faces
+        inst_per_class = table(trainLabels)[[1]]
+        predictions = DBcheck(trainPC, testPC, predictions, inst_per_class, 
+                              th)
+        
+        # Compute the accuracy
+        accuracy = sum(predictions == testLabels) / length(testLabels)
+        
+        return(accuracy)
+}
+
+```
+
+We have not talked about the determination of the mentioned threshold. Since no images were provided for this testing, we performed two different tests to see the range of possible thresholds. We used an image of Donald the Duck and a random vector of dimension 108000. By manually changing the threshold and evaluation the model with these tests, we determined the bounds for the possible range of values.
+
+The upper bound is the value for which these tests are included within the dataset (the threshold must be lower) and the lower bound is the value at which images in the dataset were taken as forgeign (the threshold must be greater). This values were approximately 4.7 and 3.8 respectively. Therefore we chose a value of 4.2 for the threshold.
+
+```{r}
+th = 4.2
+## Prediction of future performance
+modelEval(trainDataset, testDataset, train_labels, test_labels, kselected,PVEselected,th)
+## Test for alien faces
+test2 = runif(108000)
+modelEval(trainDataset, test2, train_labels, "Not in database", kselected,PVEselected,th)
+```
+
+Our final model will consist on several objects:
+
+- The principal components of the data enclosing 90% of the variance
+- The projection of our data onto these principal components
+- The labels for our data
+- The average distance between two points in the same class
+
+```{r}
+## Compute the final model
+PCs = PCmatrix(data, PVEselected)
+modelPC = data%*%PCs
+thcldist = 4.2*class_dist(modelPC, 6)
+```
+
+This model will de used by the following function to determine the class of an input image. The function takes an image as an argument and returns either one of the 25 people in the database or "Not in database", using the previous objects.
+
+```{r}
+## Check for images foreign to our database
+DBcheck2 = function(modelPC, ImagePC, prediction,thcldist){
+        prediction = as.character(prediction)
+                
+        #coordinates of train points in a class
+        cl = as.numeric(strsplit(prediction, " ")[[1]][2])
+        clM = modelPC[((cl-1)*6+1):(cl*6), ]
+                
+        #mean distance between test point and training data 
+        #in its assigned class
+        distances = vector(length = nrow(clM))
+        for (j in 1:nrow(clM)) {
+                distances[j] = dist(rbind(ImagePC, clM[j, ]))
+        }
+                
+        #not in database if distance > threshold
+        if (mean(distances) >= thcldist){
+                prediction = "Not in database"
+        }
+
+        return(prediction)
+}
+Facial_Recognition = function(Image){
+        library(OpenImageR)
+        library(class)
+        # Check dimensions of image
+        pic = as.vector(readImage(Image))
+        if (length(pic) != 108000) {
+                stop("Error: JPG file must be of dimensions 200 by 180")
+        }
+        
+        # Get the PC decomposition for the image
+        ImagePC = pic%*%PCs
+        
+        # Run knn for PC representation of image
+        prediction = knn(train = modelPC,
+                          test = ImagePC,
+                          cl = model_labels, k = 1)
+        
+        
+        # Check for alien faces
+        prediction = DBcheck2(modelPC, ImagePC, prediction, thcldist)
+        
+        return(prediction)
+}
+```
+
+We have tested the model to study the time it takes:
+
+```{r}
+resultado_tiempo <- system.time({
+    Facial_Recognition('Training/1AT.jpg')
+})
+cat("Computation time: ", resultado_tiempo["elapsed"])
+
+elapsed_time_pcanalysis=mean(c(0.005,0.018))
+```
+
+Between 0.005 s and 0.018 s.
+
+To finish with, we have created a $\texttt{Rdata}$ file with all of the necessary data for our classification model.
+
+```{r}
+## Save the model
+if (!(file.exists("Final_ModelPCA.RData"))){
+        save(PCs, modelPC, model_labels, thcldist,DBcheck2,Facial_Recognition,file = "Final_ModelPCA.RData")
+}
+```
+
+### d) Repeat b) but using the initial image representation instead of the principal component representation. Based on your results, decide if you prefer to use the principal component representation or the original representation and justify your decisions.
+
+In first place, we perform hyperparameter tuning, this time only for the number of neighbors since we are not computing PCA and do not need the percentage of variance.
+
+```{r}
+listacombinaciones = train_eval(trainDataset)
+# Hyperparameter tuning for best K
+best = k_tuning(listacombinaciones, evalTrain_labels, test_labels)
+initim_kselected= best[[1]][[1]]
+accuracy= best[[2]]
+cat('The optimal number of neighbors is',initim_kselected,'with an accuracy of',
+    accuracy*100,'%.')
+```
+
+In second place, we reconsider the threshold. For this, we have computed a new model evaluation function that is similar to the one that we created before but without performing PC Analysis on our variables.
+
+```{r}
+## Estimation of future performance
+modelEval_initimages = function(train, test, trainLabels, testLabels, k,th){
+        trainLabels = as.factor(trainLabels)
+        predictions = knn(train,test,trainLabels,k)
+
+        
+        # Check for alien faces
+        inst_per_class = table(trainLabels)[[1]]
+        predictions <- DBcheck(train, test, predictions, inst_per_class, th)
+        
+        # Compute the accuracy
+        accuracy = sum(predictions == testLabels) / length(testLabels)
+        return(accuracy)
+}
+```
+
+Since this is a new method, we have to determine the threshold again, following the same procedure as before. The maximum threshold that excludes the random vector is 4.3. The minimum threshold that allows 100% accuracy in identifying the testDataset is 1.9. Therefore, we have taken as optimal threshold the mean between those two values.
+
+```{r}
+cat('The optimal threshold is',mean(c(1.9,4.3)))
+```
+
+It can be verified that, for this threshold, all of the testDataset images are correctly identified and the random vector is correctly excluded from the dataset:
+
+```{r}
+th=3.1
+## Prediction of future performance
+modelEval_initimages(trainDataset, testDataset, train_labels, test_labels, initim_kselected,th)
+## Test for alien faces
+#test1 = as.vector(readImage("DonaldDuck.jpg"))
+set.seed(42)
+test2 = runif(108000)
+#modelEval_initimages(trainDataset, test1, train_labels, "Not in database", initim_kselected,th)
+modelEval_initimages(trainDataset, test2, train_labels, "Not in database", initim_kselected,th)
+```
+
+Finally, we have computed the final parameters for this method (using directly the initial images) and computed the final time for the classification of an example image in this method.
+
+```{r}
+## Compute the final model
+thcldist=3.1*class_dist(data,6)
+```
+
+In order to test this method with respect to the PC method, we have constructed a function for the final model, very similar to the one that we had before but without computing PC. However, our model now consists only on the matrix of training images and the computed average distance between two images belonging to the same class.
+
+```{r}
+Facial_Recognition_initimage = function(Image){
+        library(OpenImageR)
+        # Check dimensions of image
+        pic = as.vector(readImage(Image))
+        if (length(pic) != 108000) {
+                stop("Error: JPG file must be of dimensions 200 by 180")
+        }
+        # Run knn for PC representation of image
+        prediction = knn(train = data,
+                          test = pic,
+                          cl = model_labels, k = 1)
+        
+        
+        # Check for alien faces
+        prediction = DBcheck2(data, pic, prediction,thcldist)
+        
+        return(prediction)
+}
+```
+
+We have tested the model to study the time it takes:
+
+```{r}
+resultado_tiempo <- system.time({
+    x=Facial_Recognition_initimage('Training/1AT.jpg')
+})
+cat('The elapsed time of the computation of the model is',resultado_tiempo["elapsed"],'s, with the following result prediction:',x)
+```
+
+The elapsed computation time is in a range of [0.087,0.099] s, which means that the computation via PC is nuch faster than by using the initial images method. In addition, the result prediction is Person 1, which is correct, as expected. The reasoning behind PC Analysis being faster than through the initial images method is that PC performs a dimensionality reduction on the data by applying a certain variance percentage restriction, and also the resulting matrix of eigenvectors is of lower dimension than that of the observations. 
+
+It must be noted that these images have a very low number of pixels (200x180), in images with even more pixels the improvement of using PCA would be even better.
+
+```{r}
+## Compute the final model
+elapsed_time_initimages=mean(c(0.087,0.099))
+relativedelay=elapsed_time_initimages/elapsed_time_pcanalysis
+cat('Relative delay',round(relativedelay,1))
+```
+
+The initial images method takes 8.1 the time that the PC method takes.
+
+# PART B
+
+### In this second part of the assignment, you will have to implement a facial recognizer based on Fisher discriminant analysis. In order to build this classifier, you will have access to a frontal facial image dataset. The teacher has kidnapped part of this dataset to evaluate your classifier.
+
+### a) Build a function that implements the Fisher Discriminant Analysis. This function takes as input a set of observations and returns the mean of these observations, the matrix P containing the  eigen vector of the appropriate matrix and a vector D containing the variance explained by each fisher discriminant. It is only allowed to use the function eigen. 
+
+Below we have built the asked for function.
+
+```{r}
+fisher_discriminant_analysis <- function(data,labels) {
+    # Ensure that data is a matrix and the last column is a factor (class labels)
+    data <- as.matrix(data)
+    class <- as.factor(labels)
+
+    # Calculate the mean of the observations
+    mean_data <- colMeans(data)
+
+    # Compute the mean of each class
+    means <- lapply(levels(class), function(cl) colMeans(data[class == cl, , drop = FALSE]))
+    names(means) <- levels(class)  # This will help avoid subscript out of bounds errors
+
+    # Compute Within-Class Scatter Matrix
+    S_W <- matrix(0, ncol(data), ncol(data))
+    for (cl in levels(class)) {
+        S_W <- S_W + cov(data[class == cl, ])
+    }
+
+    # Compute Between-Class Scatter Matrix
+    mean_overall <- colMeans(data)
+    S_B <- matrix(0, ncol(data), ncol(data))
+    for (cl in levels(class)) {
+        n <- sum(class == cl)
+        # Ensure mean_diff is a matrix with one column
+        mean_diff <- as.matrix(means[[cl]] - mean_overall, ncol = 1)
+        # Compute outer product and update S_B
+        S_B <- S_B + n * (mean_diff %*% t(mean_diff))
+    }
+
+    # Solve the generalized eigenvalue problem for S_W^(-1) * S_B
+    eigens <- eigen(solve(S_W) %*% S_B)
+
+    # Extract the eigenvectors (P) and eigenvalues (variance explained)
+    P <- eigens$vectors
+    D <- eigens$values
+
+    # Normalize D to get the proportion of variance explained
+    D <- D / sum(D)
+
+    return(list(mean = mean_data, P = P, D = D))
+}
+```
+
+### b) Build a classifier (function) that takes as input an image and an object with the parameters of the classifier. Internally, the function uses a k-nn classifier and the Fisher discriminant analysis representation of the images. If the person in the image belongs to the database, it returns the person’s identifiers. Otherwise it returns 0. In order to build this, you will need to consider: the percentage of the variance retaining by the Fisher discriminant dimensions, the number of neighbors of the k-nn, the similarity metric and the threshold to determine when the person belongs to the database.
+### and c) Explain how you have determined the previous parameters.
+
+As in part A, we will carry out these two sections concurrently. This function is similar to the $\texttt{PCmatrix}$ function used in part A, but now calculates the fisher eigenvectors instead.
+
+```{r}
+PCmatrixfisher <- function(dataMatrix, labels, PVE) {
+  ## Get eigenvectors and eigenvalues (proportion)
+  result <- fisher_discriminant_analysis(dataMatrix,labels)
+  means <- result[['mean']]
+  P <- result[['P']]
+  D <- result[['D']]
+  
+  ## Initialize the proportion of variance explained
+  varExp <- 0
+  i <- 0
+  
+  ## build PCs containing a given proportion of variance explained (PVE)
+    while(varExp < PVE && i < length(D)) {
+      i<-i+1
+      varExp <- varExp + D[i]
+    }
+  
+  PCs <- P[,1:i]
+  return(PCs)
+}
+```
+
+Similarly to the previous part, we perform the inner evaluation to get the optimal hyperparameters for the KNN. Note that before carrying out the discriminant analysis we have performed PCA on the data. This is because the raw fisher matrix of the data is too large to calculate eigenvectors/eigenvalues (108000x108000). In addition, when taking 100% variance in PCA, the matrix resulting is almost singular. For this reason, we haven taken a percentage of variance explained big enough for the facial recognition to work but small enough for the matrix to be well-behaved; 89%. 
+
+For the computation we have used the $\texttt{PCmatrix}$ and $\texttt{k_tuning}$ functions defined in the first part.
+
+```{r, cache = TRUE}
+pve<- seq(0.1, 1, by = 0.1)
+optk = vector(length = length(pve))
+accuracies = vector(length = length(pve))
+
+# PCA of the train data 
+trainPC = trainDataset%*%PCmatrix(trainDataset, 0.89)
+for (i in 1:length(pve)){
+
+        # PCA of the train data 
+        trainPCfisher = trainPC%*%PCmatrixfisher(trainPC, train_labels,pve[i])
+        
+        # split train data into train/evaluation
+        listacombinaciones = train_eval(trainPCfisher)
+        
+        # Hyperparameter tuning for best K
+        best = k_tuning(listacombinaciones, evalTrain_labels, test_labels)
+        optk[i] = best[[1]][[1]]
+        accuracies[i] = best[[2]]
+}
+```
+
+The following plot shows the accuracy of the model computed with the optimal value of k, for different percentages of variance from 0.1 to 1 (with the fisher analysis).
+
+```{r}
+plotdf = data.frame(acc = accuracies, PVE = seq(0.1, 1, by = 0.1))
+ggplot(plotdf, aes(PVE, acc)) +
+        geom_line(col = "steelblue") +
+        geom_point() +
+        labs(x = "Proportion of Variance Explained (PVE)",
+             y = "Accuracy of the model",
+             title = "Evaluation for optimal PVE") + 
+        theme(plot.title = element_text(hjust = 0.5))
+```
+
+As we can see in the previous plot, for a percentage of variance of 40%, a 100% accuracy is already achieved by using its optimal $k$:
+
+```{r}
+PVEselected = pve[which(accuracies==max(accuracies))[1]]
+kselected = optk[which(accuracies==max(accuracies))[1]]
+cat('The optimal number of neighbors for a', PVEselected*100, '% PVE is:',kselected,'.')
+```
+
+Using all of the previous functions, we have finally created a function that evaluates the accuracy of our model, as in the previous part.
+
+```{r}
+## Estimation of future performance
+modelEvalfisher = function(train, test, trainLabels, testLabels, k, PVE,
+                     th){
+        
+        # Get the PC decomposition for the train and test set
+        eigenVecs = PCmatrix(train, 0.88)
+        trainPC = trainDataset%*%eigenVecs
+        testPC = test%*%eigenVecs
+        eigenVecs = PCmatrixfisher(trainPC,trainLabels, PVE)
+        trainPC = trainPC%*%eigenVecs
+        testPC = testPC%*%eigenVecs
+        # Run knn for PC representation of test set
+        trainLabels = as.factor(trainLabels)
+        predictions = knn(train = trainPC,
+                          test = testPC,
+                          cl = trainLabels, k = k)
+
+        
+        # Check for alien faces
+        inst_per_class = table(trainLabels)[[1]]
+        predictions = DBcheck(trainPC, testPC, predictions, inst_per_class, 
+                              th)
+        
+        # Compute the accuracy
+        accuracy = sum(predictions == testLabels) / length(testLabels)
+        
+        return(accuracy)
+}
+```
+
+We now test this function for both the test set as well as external images.
+
+```{r}
+th=7
+## Prediction of future performance
+modelEvalfisher(trainDataset, testDataset, train_labels, test_labels, kselected,PVEselected,th)
+## Test for alien faces
+test2 = runif(108000)
+modelEvalfisher(trainDataset, test2, train_labels, "Not in database", kselected,PVEselected,th)
+```
+
+The threshold range for foreign images is now [5.9,7], so we have chosen a value of 6.45 for the threshold.
+
+Our final model will consist on several objects:
+
+- The principal components of the data enclosing 70% of the variance
+- The projection of our data onto these principal components
+- The labels for our data
+- The average distance between two points in the same class
+
+```{r}
+## Compute the final model
+PCsPCA_forfisher=PCmatrix(data,0.88)
+PCdata_forfisher=data%*%PCsPCA_forfisher
+PCsfisher = PCmatrixfisher(PCdata_forfisher,model_labels,PVEselected)
+modelPCfisher = PCdata_forfisher%*%PCsfisher
+thcldistfish=6.45*class_dist(modelPCfisher, 6)
+```
+
+It is important to note that we have increased the pve from 0.4 up to 0.7. This is because when evaluating the model with the testing set, 40% of the variance got an accuracy of 96%, while 70% of variance managed to get 100%.
+
+This model will de used by the following function to determine the class of an input image. The function takes an image as an argument and returns either one of the 25 people in the database or "Not in database", using the previous objects.
+
+```{r}
+Facial_Recognition_fisher = function(Image){
+        library(OpenImageR)
+        library(class)
+        # Check dimensions of image
+        pic = as.vector(readImage(Image))
+        if (length(pic) != 108000) {
+                stop("Error: JPG file must be of dimensions 200 by 180")
+        }
+        
+        # Get the PC decomposition for the image
+        ImagePCA = pic%*%PCsPCA_forfisher
+        ImagePC = ImagePCA%*%PCsfisher
+        
+        # Run knn for PC representation of image
+        prediction = knn(train = modelPCfisher,
+                          test = ImagePC,
+                          cl = model_labels, k = 1)
+        
+        
+        # Check for alien faces
+        prediction = DBcheck2(modelPCfisher, ImagePC, prediction,thcldistfish)
+        
+        return(prediction)
+}
+```
+
+We have tested the model to study the time it takes:
+
+```{r}
+resultado_tiempo <- system.time({
+    Facial_Recognition_fisher('Training/1AT.jpg')
+})
+cat(resultado_tiempo["elapsed"])
+```
+
+The average elapsed time after running several times is approximately 0.011 s.
+
+
+To finish with, we have created a $\texttt{Rdata}$ file with all of the necessary data for our classification model.
+
+```{r}
+## Save the model
+if (!(file.exists("Final_ModelFisher.RData"))){
+        save(PCsPCA_forfisher,PCsfisher, modelPCfisher, model_labels, thcldistfish,DBcheck2,Facial_Recognition_fisher,file = "Final_ModelFisher.RData")
+}
+```
