@@ -1,4 +1,4 @@
-The assignment consists on 3 different files names Facial_Recognition_project.Rmd, Final_ModelPCA.Rdata and Final_ModelFisher.Rdata. In addition, we have also included the training data. We will now explain what each of them are and how they are supposed to be used.
+The assignment consists on 3 different files names Facial_Recognition_project.Rmd, Final_ModelPCA.Rdata and Final_ModelFisher.Rdata. We will now explain what each of them are and how they are supposed to be used.
 
 
 - Facial_Recognition_project.Rmd: An Rmarkdown report containing the code and explanation followed when carrying out the training. It runs from start to end without the need for any extra steps. It is the main body of the assignment.
