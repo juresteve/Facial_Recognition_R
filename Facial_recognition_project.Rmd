@@ -347,10 +347,10 @@ modelEval = function(train, test, trainLabels, testLabels, k, PVE,
 
 We have not talked about the determination of the mentioned threshold. Since no images were provided for this testing, we performed two different tests to see the range of possible thresholds. We used an image of Donald the Duck and a random vector of dimension 108000. By manually changing the threshold and evaluation the model with these tests, we determined the bounds for the possible range of values.
 
-The upper bound is the value for which these tests are included within the dataset (the threshold must be lower) and the lower bound is the value at which images in the dataset were taken as forgeign (the threshold must be greater). This values were approximately 4.7 and 3.8 respectively. Therefore we chose a value of 4.2 for the threshold.
+The upper bound is the value for which these tests are included within the dataset (the threshold must be lower) and the lower bound is the value at which images in the dataset were taken as forgeign (the threshold must be greater). This values were approximately 4.4 and 2.5 respectively. Therefore we chose a value of 3.4 for the threshold.
 
 ```{r}
-th = 4.2
+th = 3.4
 ## Prediction of future performance
 modelEval(trainDataset, testDataset, train_labels, test_labels, kselected,PVEselected,th)
 ## Test for alien faces
@@ -369,7 +369,7 @@ Our final model will consist on several objects:
 ## Compute the final model
 PCs = PCmatrix(data, PVEselected)
 modelPC = data%*%PCs
-thcldist = 4.2*class_dist(modelPC, 6)
+thcldist = 3.4*class_dist(modelPC, 6)
 ```
 
 This model will de used by the following function to determine the class of an input image. The function takes an image as an argument and returns either one of the 25 people in the database or "Not in database", using the previous objects.
